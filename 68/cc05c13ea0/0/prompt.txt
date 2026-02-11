@@ -1,0 +1,89 @@
+Implement the following plan:
+
+# Plan: Create README.md
+
+## Context
+`slk` is a Rust CLI tool for reading Slack threads in the terminal. No README exists yet. Create one in English.
+
+## Steps
+
+### 1. Create `/home/kanta/src/otomarukanta/slk/README.md` with the following sections:
+
+**Header & Description**
+- Project name `slk` and one-line description: a CLI tool to read Slack threads in the terminal
+
+**Usage**
+```bash
+slk <slack-thread-url>   # Display thread messages
+slk login                # Authenticate via OAuth
+```
+
+**Prerequisites**
+- Rust toolchain (for building)
+- `curl` (used internally for Slack API calls)
+
+**Installation**
+```bash
+cargo install --path .
+```
+
+**Setup (Slack App)**
+1. Create a Slack app at https://api.slack.com/apps
+2. Add OAuth redirect URL: `https://127.0.0.1:9876`
+3. Add User Token Scopes: `channels:history`, `groups:history`, `users:read`
+4. Note the Client ID and Client Secret
+
+**Configuration**
+- Environment variables: `SLK_CLIENT_ID`, `SLK_CLIENT_SECRET`
+- Or config file: `~/.config/slk/config.json`
+  ```json
+  { "client_id": "...", "client_secret": "..." }
+  ```
+- Then run `slk login` to authenticate (token saved to `~/.config/slk/credentials`)
+- Alternatively, set `SLACK_TOKEN` env var directly
+
+## Verification
+- Confirm README content matches actual code behavior
+- Ensure documented commands are accurate
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kanta/.REDACTED.jsonl
+
+---
+
+## Context
+
+- Current git status: On branch main
+Your branch is up to date with 'origin/main'.
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	README.md
+
+nothing added to commit but untracked files present (use "git add" to track)
+- Current git diff (staged and unstaged changes): 
+- Current branch: main
+- Recent commits: 8983537 feat: replace manual URL paste with local HTTPS callback server for OAuth Entire-Checkpoint: 7158f4df2842
+bfa226a feat: add OAuth login flow with manual URL paste method Entire-Checkpoint: a62ea2ed5972
+da37dd2 chore: add entire tool configuration and claude code hooks Entire-Checkpoint: a96020e1cce9
+3d51ab1 feat: resolve user names via users.info API with error handling Entire-Checkpoint: 954e1bef0b32
+360c735 feat: add timestamp display to slack messages Entire-Checkpoint: fb12e6658184
+af6c4ef first commit
+
+## Your task
+
+変更内容を分析し、3つのコミットメッセージ候補を生成してユーザーに選択させます。
+
+1. Analyze the diff content to understand the nature and purpose of the changes
+2. Generate 3 commit message candidates based on the changes
+   - Each candidate should be concise, clear, and capture the essence of the changes
+   - Prefer Conventional Commits format (feat:, fix:, docs:, refactor:, etc.)
+3. Select the most appropriate commit message from the 3 candidates and explain the reasoning for your choice
+4. Stage changes if necessary using git add
+5. Execute git commit using the selected commit message
+
+## Constraint
+
+- Claude co-authorshipフッターは不要
+- 1行で簡潔
+- メッセージは簡単な英語
