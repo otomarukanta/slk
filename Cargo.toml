@@ -1,0 +1,8 @@
+[package]
+name = "slk"
+version = "0.1.0"
+edition = "2024"
+description = "A CLI tool to read Slack threads"
+license = "MIT"
+
+[dependencies]
