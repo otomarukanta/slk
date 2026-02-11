@@ -1,0 +1,48 @@
+Implement the following plan:
+
+# 認可 URL をコンソールに表示する
+
+## Context
+
+WSL など `xdg-open` が使えない環境でも、ユーザーが手動で URL をブラウザに貼り付けてログインできるようにする。
+
+## 変更内容
+
+**ファイル:** `src/oauth.rs` (102行目付近)
+
+現在の出力:
+```
+Opening browser for Slack authorization...
+Waiting for callback on http://localhost:9876 ...
+```
+
+変更後の出力:
+```
+Open this URL in your browser:
+  https://slack.com/oauth/v2/authorize?client_id=...&user_scope=...&redirect_uri=...
+Waiting for callback on http://localhost:9876 ...
+```
+
+- `"Opening browser..."` メッセージを URL 表示に置き換え
+- `xdg-open` の呼び出しは維持（失敗しても無視）
+
+## 検証
+
+- `cargo build && cargo test` が通る
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kanta/.claude/projects/-home-kanta-src-otomarukanta-slk/3206443c-3d6f-4cdc-817a-46ac6ffff67c.jsonl
+
+---
+
+redirect_uri did not match any configured URIs. Passed URI: http://localhost:9876
+というエラーがSlack側で出た
+
+---
+
+redirect_uri did not match any configured URIs. Passed URI: http://localhost:9876
+同じエラーのままです。Redirect URLsにhttpsが登録できないからでは？
+
+---
+
+[Request interrupted by user for tool use]
