@@ -1,0 +1,47 @@
+Implement the following plan:
+
+# ユーザーIDを @表示名 形式で表示する
+
+## Context
+現在メッセージのユーザー欄にSlack APIから取得したユーザーID（例: `U081R4ZS5E2`）がそのまま表示されている。`users.info` APIでユーザー名を解決し、`@kanta` のようなメンション形式で表示するようにする。
+
+## 変更内容
+
+### 1. `src/slack_api.rs` — ユーザー情報取得関数を追加
+- `fetch_user_info(user_id: &str, token: &str) -> Result<String, SlkError>` を追加
+- `https://slack.com/api/users.info?user={user_id}` を curl で呼び出す
+- 既存の `fetch_thread_replies` と同じパターンで実装
+
+### 2. `src/message.rs` — ユーザー名解決関数を追加
+- `resolve_user_name(response: &JsonValue) -> Option<String>` を追加
+- users.info レスポンスの JSON から表示名を抽出
+- 優先順位: `user.profile.display_name` → `user.real_name` → `user.name`
+- 空文字列の場合は次のフォールバックへ
+
+### 3. `src/main.rs` — ユーザー名解決を `run()` に組み込む
+- メッセージ抽出後、ユニークなユーザーID（`U` で始まるもの）を収集
+- 各IDに対して `slack_api::fetch_user_info` → `message::resolve_user_name` で名前を取得
+- `HashMap<String, String>` (user_id → display_name) を構築
+- `format_messages` の引数にマップを追加
+- 表示フォーマットを `[USER_ID]` → `@display_name` に変更
+- 名前解決に失敗した場合はIDをそのまま表示
+
+### 修正対象ファイル
+- `src/slack_api.rs` — API呼び出し関数追加
+- `src/message.rs` — 名前解決ロジック追加
+- `src/main.rs` — 統合とフォーマット変更
+
+## 検証
+- `cargo test` で全テストがパスすることを確認
+- `cargo build` でビルドが成功することを確認
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kanta/.REDACTED.jsonl
+
+---
+
+権限が足りなくて取得できていなさそう。extract_messagesでやっているように、足りていない権限があればエラーを出すようにしたい。
+
+---
+
+[Request interrupted by user for tool use]

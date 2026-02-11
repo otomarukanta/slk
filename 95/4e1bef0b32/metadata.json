@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "954e1bef0b32",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/main.rs",
+    "src/message.rs",
+    "src/slack_api.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/95/4e1bef0b32/0/metadata.json",
+      "transcript": "/95/4e1bef0b32/0/full.jsonl",
+      "context": "/95/4e1bef0b32/0/context.md",
+      "content_hash": "/95/4e1bef0b32/0/content_hash.txt",
+      "prompt": "/95/4e1bef0b32/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 28731,
+    "cache_read_tokens": 595432,
+    "output_tokens": 2739,
+    "api_call_count": 18
+  }
+}
