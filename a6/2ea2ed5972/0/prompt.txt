@@ -1,0 +1,129 @@
+Implement the following plan:
+
+# `slk login` — OAuth フローによるトークン取得
+
+## Context
+
+現在 `slk` は `SLACK_TOKEN` 環境変数でのみトークンを受け取る。`slk login` で OAuth フローを通じてブラウザ認証し、自動でトークンを取得・保存できるようにする。
+
+## OAuth フローの流れ
+
+```
+$ slk login
+Opening browser for Slack authorization...
+Waiting for callback on http://localhost:9876 ...
+✓ Token saved to ~/.config/slk/credentials
+```
+
+1. client_id / client_secret を設定ファイルまたは環境変数から読む
+2. ローカルに TCP サーバー起動（`127.0.0.1:9876`）
+3. ブラウザで Slack 認可画面を開く（`xdg-open`）
+4. ユーザーが許可 → Slack がローカルサーバーにリダイレクト（`?code=...`）
+5. code を使って `oauth.v2.access` API でトークン交換（curl）
+6. `authed_user.access_token` を `~/.config/slk/credentials` に保存
+7. ブラウザに「Login successful!」を返して完了
+
+**前提条件:** Slack App で Redirect URL に `http://localhost:9876` を登録しておく必要がある
+
+## 変更するファイル
+
+| ファイル | 操作 | 内容 |
+|---------|------|------|
+| `src/config.rs` | **新規** | 設定ディレクトリ管理、トークン読み書き、client_id/secret 読み込み |
+| `src/oauth.rs` | **新規** | OAuth フロー全体（ローカルサーバー、ブラウザ起動、トークン交換） |
+| `src/main.rs` | **修正** | サブコマンド分岐の追加、トークン解決のフォールバック |
+
+依存クレート追加なし（stdlib + system curl のみ）。
+
+## 詳細設計
+
+### 1. `src/config.rs`（新規）
+
+**設定ディレクトリ:** `$XDG_CONFIG_HOME/slk` or `$HOME/.config/slk`
+
+**関数:**
+- `config_dir()` → `Result<PathBuf>` — 設定ディレクトリのパス解決
+- `load_token()` → `Result<Option<String>>` — `credentials` ファイルからトークン読み込み（未存在は `Ok(None)`）
+- `save_token(token)` → `Result<PathBuf>` — トークン保存（ディレクトリ作成、パーミッション `0o600`）
+- `load_client_credentials()` → `Result<(String, String)>` — client_id/secret を取得
+
+**client_id / client_secret の取得優先順位:**
+1. 環境変数 `SLK_CLIENT_ID` / `SLK_CLIENT_SECRET`
+2. 設定ファイル `~/.config/slk/config.json`（既存の JSON パーサーを活用）
+
+```json
+{
+  "client_id": "123456.789012",
+  "client_secret": "abcdef..."
+}
+```
+
+エラーメッセージ: `"client_id and client_secret are required. Set SLK_CLIENT_ID/SLK_CLIENT_SECRET or create ~/.config/slk/config.json"`
+
+### 2. `src/oauth.rs`（新規）
+
+**ローカル HTTP サーバー:**
+- `std::net::TcpListener::bind("127.0.0.1:9876")` で起動
+- 1 リクエストだけ受け付けて終了
+- リクエストから `code` クエリパラメータを抽出
+- HTML レスポンスを返す（「Login successful! You can close this tab.」）
+
+**ブラウザ起動:**
+- `xdg-open` コマンドで認可 URL を開く
+- URL: `https://slack.com/oauth/v2/authorize?client_id={}&user_scope=channels:history,groups:history,users:read&redirect_uri=http://localhost:9876`
+
+**トークン交換:**
+- system curl で POST: `https://slack.com/api/oauth.v2.access`
+- パラメータ: `client_id`, `client_secret`, `code`, `redirect_uri`
+- レスポンス JSON から `authed_user.access_token` を抽出（既存の `json::parse` を使用）
+
+**公開関数:**
+- `run_oauth_flow(client_id, client_secret)` → `Result<String>` — フロー全体を実行し、アクセストークンを返す
+
+### 3. `src/main.rs`（修正）
+
+**引数パースの拡張:**
+```rust
+enum Command {
+    Login,
+    ShowThread { url: String },
+}
+```
+- `args[1] == "login"` → `Command::Login`
+- それ以外 → `Command::ShowThread`
+
+**`Command::Login` の処理:**
+1. `config::load_client_credentials()` で client_id/secret 取得
+2. `oauth::run_oauth_flow(client_id, client_secret)` でトークン取得
+3. `config::save_token(token)` で保存
+4. 成功メッセージを表示
+
+**トークン解決（`slk <url>` 実行時）:**
+1. `$SLACK_TOKEN` 環境変数（優先）
+2. `~/.config/slk/credentials` ファイル
+3. エラー: `"no Slack token found. Set SLACK_TOKEN or run: slk login"`
+
+**usage 更新:**
+```
+usage: slk <slack-thread-url>
+       slk login
+```
+
+## 検証方法
+
+1. `cargo build` / `cargo test` が通る
+2. `~/.config/slk/config.json` に client_id/secret を設定
+3. `slk login` → ブラウザが開き → Slack で許可 → トークンが保存される
+4. `~/.config/slk/credentials` のパーミッションが `600`
+5. 環境変数なしで `slk <url>` が動作する
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kanta/.REDACTED.jsonl
+
+---
+
+開くべきURLをコンソールに表示するようにして
+
+---
+
+[Request interrupted by user for tool use]
