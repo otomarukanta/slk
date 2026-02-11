@@ -1,6 +1,8 @@
+mod config;
 mod error;
 mod json;
 mod message;
+mod oauth;
 mod slack_api;
 mod url;
 
@@ -8,10 +10,36 @@ use std::collections::HashMap;
 
 use error::SlkError;
 
-fn parse_args(args: Vec<String>) -> Result<String, SlkError> {
-    args.into_iter()
+enum Command {
+    Login,
+    ShowThread { url: String },
+}
+
+fn parse_args(args: Vec<String>) -> Result<Command, SlkError> {
+    let arg = args
+        .into_iter()
         .nth(1)
-        .ok_or(SlkError::from("usage: slk <slack-thread-url>"))
+        .ok_or(SlkError::from("usage: slk <slack-thread-url>\n       slk login"))?;
+
+    if arg == "login" {
+        Ok(Command::Login)
+    } else {
+        Ok(Command::ShowThread { url: arg })
+    }
+}
+
+fn resolve_token() -> Result<String, SlkError> {
+    if let Ok(token) = std::env::var("SLACK_TOKEN") {
+        if !token.is_empty() {
+            return Ok(token);
+        }
+    }
+    if let Some(token) = config::load_token()? {
+        return Ok(token);
+    }
+    Err(SlkError::from(
+        "no Slack token found. Set SLACK_TOKEN or run: slk login",
+    ))
 }
 
 fn format_messages(
@@ -56,16 +84,28 @@ fn resolve_user_names(
     Ok(names)
 }
 
-fn run(args: Vec<String>) -> Result<String, SlkError> {
-    let url_str = parse_args(args)?;
-    let token = std::env::var("SLACK_TOKEN")
-        .map_err(|_| SlkError::from("SLACK_TOKEN environment variable is not set"))?;
-    let thread = url::parse_slack_url(&url_str)?;
+fn run_login() -> Result<String, SlkError> {
+    let (client_id, client_secret) = config::load_client_credentials()?;
+    let token = oauth::run_oauth_flow(&client_id, &client_secret)?;
+    let path = config::save_token(&token)?;
+    Ok(format!("Token saved to {}", path.display()))
+}
+
+fn run_show_thread(url_str: &str) -> Result<String, SlkError> {
+    let token = resolve_token()?;
+    let thread = url::parse_slack_url(url_str)?;
     let raw_json = slack_api::fetch_thread_replies(&thread.channel_id, &thread.ts, &token)?;
     let json_value = json::parse(&raw_json)?;
     let messages = message::extract_messages(&json_value)?;
     let user_names = resolve_user_names(&messages, &token)?;
     Ok(format_messages(&messages, &user_names))
+}
+
+fn run(args: Vec<String>) -> Result<String, SlkError> {
+    match parse_args(args)? {
+        Command::Login => run_login(),
+        Command::ShowThread { url } => run_show_thread(&url),
+    }
 }
 
 fn main() {
@@ -84,20 +124,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_args_valid() {
+    fn test_parse_args_valid_url() {
         let args = vec![
             "slk".to_string(),
             "https://myteam.slack.com/archives/C081VT5GLQH/p1770689887565249".to_string(),
         ];
         let result = parse_args(args).unwrap();
-        assert_eq!(
-            result,
-            "https://myteam.slack.com/archives/C081VT5GLQH/p1770689887565249"
-        );
+        match result {
+            Command::ShowThread { url } => assert_eq!(
+                url,
+                "https://myteam.slack.com/archives/C081VT5GLQH/p1770689887565249"
+            ),
+            _ => panic!("expected ShowThread"),
+        }
     }
 
     #[test]
-    fn test_parse_args_no_url() {
+    fn test_parse_args_login() {
+        let args = vec!["slk".to_string(), "login".to_string()];
+        let result = parse_args(args).unwrap();
+        assert!(matches!(result, Command::Login));
+    }
+
+    #[test]
+    fn test_parse_args_no_args() {
         let args = vec!["slk".to_string()];
         assert!(parse_args(args).is_err());
     }
