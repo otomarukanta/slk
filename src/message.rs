@@ -93,6 +93,57 @@ pub fn extract_messages(response: &JsonValue) -> Result<Vec<SlackMessage>, SlkEr
     Ok(result)
 }
 
+pub fn resolve_user_name(response: &JsonValue) -> Result<String, SlkError> {
+    let ok = response
+        .get("ok")
+        .and_then(|v| v.as_bool())
+        .ok_or(SlkError::from("missing 'ok' field in response"))?;
+
+    if !ok {
+        let error = response
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        let needed = response.get("needed").and_then(|v| v.as_str());
+        let provided = response.get("provided").and_then(|v| v.as_str());
+        let mut msg = format!("Slack API error: {}", error);
+        if let Some(needed) = needed {
+            msg.push_str(&format!("\n  needed scope: {}", needed));
+        }
+        if let Some(provided) = provided {
+            msg.push_str(&format!("\n  provided scopes: {}", provided));
+        }
+        return Err(SlkError::from(msg));
+    }
+
+    let user = response
+        .get("user")
+        .ok_or(SlkError::from("missing 'user' field in response"))?;
+
+    let profile = user.get("profile");
+    if let Some(profile) = profile {
+        if let Some(display_name) = profile.get("display_name").and_then(|v| v.as_str()) {
+            if !display_name.is_empty() {
+                return Ok(display_name.to_string());
+            }
+        }
+    }
+
+    if let Some(real_name) = user.get("real_name").and_then(|v| v.as_str()) {
+        if !real_name.is_empty() {
+            return Ok(real_name.to_string());
+        }
+    }
+
+    if let Some(name) = user.get("name").and_then(|v| v.as_str()) {
+        if !name.is_empty() {
+            return Ok(name.to_string());
+        }
+    }
+
+    Err(SlkError::from("no user name found in response"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +228,79 @@ mod tests {
         let messages = extract_messages(&json_val).unwrap();
 
         assert_eq!(messages[0].text, "");
+    }
+
+    #[test]
+    fn test_resolve_user_name_display_name() {
+        let input = r#"{
+            "ok": true,
+            "user": {
+                "name": "kanta",
+                "real_name": "Kanta Otomaeru",
+                "profile": {
+                    "display_name": "kanta"
+                }
+            }
+        }"#;
+        let json_val = json::parse(input).unwrap();
+        assert_eq!(resolve_user_name(&json_val).unwrap(), "kanta");
+    }
+
+    #[test]
+    fn test_resolve_user_name_fallback_to_real_name() {
+        let input = r#"{
+            "ok": true,
+            "user": {
+                "name": "kanta",
+                "real_name": "Kanta Otomaeru",
+                "profile": {
+                    "display_name": ""
+                }
+            }
+        }"#;
+        let json_val = json::parse(input).unwrap();
+        assert_eq!(resolve_user_name(&json_val).unwrap(), "Kanta Otomaeru");
+    }
+
+    #[test]
+    fn test_resolve_user_name_fallback_to_name() {
+        let input = r#"{
+            "ok": true,
+            "user": {
+                "name": "kanta",
+                "profile": {
+                    "display_name": ""
+                }
+            }
+        }"#;
+        let json_val = json::parse(input).unwrap();
+        assert_eq!(resolve_user_name(&json_val).unwrap(), "kanta");
+    }
+
+    #[test]
+    fn test_resolve_user_name_api_error() {
+        let input = r#"{"ok": false, "error": "user_not_found"}"#;
+        let json_val = json::parse(input).unwrap();
+        let result = resolve_user_name(&json_val);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("user_not_found"));
+    }
+
+    #[test]
+    fn test_resolve_user_name_missing_scope() {
+        let input = r#"{
+            "ok": false,
+            "error": "missing_scope",
+            "needed": "users:read",
+            "provided": "channels:history"
+        }"#;
+        let json_val = json::parse(input).unwrap();
+        let result = resolve_user_name(&json_val);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().message;
+        assert!(msg.contains("missing_scope"));
+        assert!(msg.contains("users:read"));
+        assert!(msg.contains("channels:history"));
     }
 
     #[test]

@@ -8,6 +8,25 @@ pub fn build_api_url(channel_id: &str, ts: &str) -> String {
     )
 }
 
+pub fn fetch_user_info(user_id: &str, token: &str) -> Result<String, SlkError> {
+    let url = format!("https://slack.com/api/users.info?user={}", user_id);
+    let output = Command::new("curl")
+        .args(["-s", "-H", &format!("Authorization: Bearer {}", token), &url])
+        .output()
+        .map_err(|e| SlkError::from(format!("failed to execute curl: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(SlkError::from(format!(
+            "curl failed (exit {}): {}",
+            output.status, stderr
+        )));
+    }
+
+    String::from_utf8(output.stdout)
+        .map_err(|e| SlkError::from(format!("invalid UTF-8 in response: {}", e)))
+}
+
 pub fn fetch_thread_replies(channel_id: &str, ts: &str, token: &str) -> Result<String, SlkError> {
     let url = build_api_url(channel_id, ts);
     let output = Command::new("curl")
