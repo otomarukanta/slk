@@ -1,0 +1,248 @@
+Implement the following plan:
+
+# OAuth フローを手動 URL 貼り付け方式に変更
+
+## Context
+
+Slack が Redirect URL に https のみ受け付けるため、ローカル HTTP サーバーでコールバックを受け取る方式が使えない。
+OAuth フローは維持しつつ、リダイレクト先の URL をユーザーに手動で貼り付けてもらう方式に変更する。
+
+**フロー:**
+1. `slk login` → 認可 URL をコンソールに表示（+ `xdg-open` も試行）
+2. ユーザーがブラウザで Slack を認可
+3. Slack が `https://localhost:9876?code=xxx` にリダイレクト → ブラウザは接続エラー
+4. ユーザーがアドレスバーの URL をコピーして CLI に貼り付け
+5. CLI が code を抽出 → トークン取得 → 保存
+
+**前提:** Slack App の Redirect URLs に `https://localhost:9876` を登録済み
+
+## 変更内容
+
+### 1. `src/oauth.rs` — `run_oauth_flow()` を書き換え
+
+- `REDIRECT_URI` を `https://localhost:9876` に変更
+- `TcpListener` を削除（ローカルサーバー不要）
+- 認可 URL をコンソールに表示
+- `xdg-open` は維持（失敗しても無視）
+- stdin から URL を読み取り → `extract_code()` で code 抽出
+- `exchange_code()` でトークン取得
+
+```rust
+const REDIRECT_URI: &str = "https://localhost:9876";
+
+pub fn run_oauth_flow(client_id: &str, client_secret: &str) -> Result<String, SlkError> {
+    let auth_url = format!(
+        "https://slack.com/oauth/v2/authorize?client_id={}&user_scope=channels:history,groups:history,users:read&redirect_uri={}",
+        client_id,
+        REDIRECT_URI.replace(':', "%3A").replace('/', "%2F")
+    );
+
+    eprintln!("Open this URL in your browser:\n  {}", auth_url);
+    let _ = Command::new("xdg-open").arg(&auth_url).spawn();
+
+    eprintln!("\nAfter authorization, your browser will show a connection error.");
+    eprintln!("Copy the URL from the address bar and paste it here:");
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)
+        .map_err(|e| SlkError::from(format!("failed to read input: {}", e)))?;
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(SlkError::from("no URL provided"));
+    }
+
+    let code = extract_code_from_url(input)?;
+    exchange_code(client_id, client_secret, &code)
+}
+```
+
+### 2. `src/oauth.rs` — `extract_code()` をリネーム
+
+現在の `extract_code()` は HTTP リクエスト行（`GET /?code=xxx HTTP/1.1`）からパースしている。
+URL 文字列（`https://localhost:9876?code=xxx`）から直接パースするように変更。
+
+- 関数名: `extract_code_from_url(url: &str)`
+- `?` 以降のクエリ文字列を取得し、`code=` パラメータを抽出
+- 既存テストも URL 形式に合わせて更新
+
+### 3. 不要コードの削除
+
+- `use std::net::TcpListener;` を削除
+- `use std::io::Read` を削除（`Write` は HTML レスポンスで使っていたがそれも不要に）
+- TCP リスナー / ストリーム / HTML レスポンス関連コードをすべて削除
+
+## 検証
+
+- `cargo build && cargo test` が通る
+- 実際に `slk login` を実行し、URL 貼り付けでトークンが保存されることを確認
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kanta/.REDACTED.jsonl
+
+---
+
+## Context
+
+- Current git status: On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   src/main.rs
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	src/config.rs
+	src/oauth.rs
+
+no changes added to commit (use "git add" and/or "git commit -a")
+- Current git diff (staged and unstaged changes): diff --git a/src/main.rs b/src/main.rs
+index 506d958..46d87da 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,6 +1,8 @@
++mod config;
+ mod error;
+ mod json;
+ mod message;
++mod oauth;
+ mod slack_api;
+ mod url;
+ 
+@@ -8,10 +10,36 @@ use std::collections::HashMap;
+ 
+ use error::SlkError;
+ 
+-fn parse_args(args: Vec<String>) -> Result<String, SlkError> {
+-    args.into_iter()
++enum Command {
++    Login,
++    ShowThread { url: String },
++}
++
++fn parse_args(args: Vec<String>) -> Result<Command, SlkError> {
++    let arg = args
++        .into_iter()
+         .nth(1)
+-        .ok_or(SlkError::from("usage: slk <slack-thread-url>"))
++        .ok_or(SlkError::from("usage: slk <slack-thread-url>\n       slk login"))?;
++
++    if arg == "login" {
++        Ok(Command::Login)
++    } else {
++        Ok(Command::ShowThread { url: arg })
++    }
++}
++
++fn resolve_token() -> Result<String, SlkError> {
++    if let Ok(token) = std::env::var("SLACK_TOKEN") {
++        if !token.is_empty() {
++            return Ok(token);
++        }
++    }
++    if let Some(token) = config::load_token()? {
++        return Ok(token);
++    }
++    Err(SlkError::from(
++        "no Slack token found. Set SLACK_TOKEN or run: slk login",
++    ))
+ }
+ 
+ fn format_messages(
+@@ -56,11 +84,16 @@ fn resolve_user_names(
+     Ok(names)
+ }
+ 
+-fn run(args: Vec<String>) -> Result<String, SlkError> {
+-    let url_str = parse_args(args)?;
+-    let token = std::env::var("SLACK_TOKEN")
+-        .map_err(|_| SlkError::from("SLACK_TOKEN environment variable is not set"))?;
+-    let thread = url::parse_slack_url(&url_str)?;
++fn run_login() -> Result<String, SlkError> {
++    let (client_id, client_secret) = config::load_client_credentials()?;
++    let token = oauth::run_oauth_flow(&client_id, &client_secret)?;
++    let path = config::save_token(&token)?;
++    Ok(format!("Token saved to {}", path.display()))
++}
++
++fn run_show_thread(url_str: &str) -> Result<String, SlkError> {
++    let token = resolve_token()?;
++    let thread = url::parse_slack_url(url_str)?;
+     let raw_json = slack_api::fetch_thread_replies(&thread.channel_id, &thread.ts, &token)?;
+     let json_value = json::parse(&raw_json)?;
+     let messages = message::extract_messages(&json_value)?;
+@@ -68,6 +101,13 @@ fn run(args: Vec<String>) -> Result<String, SlkError> {
+     Ok(format_messages(&messages, &user_names))
+ }
+ 
++fn run(args: Vec<String>) -> Result<String, SlkError> {
++    match parse_args(args)? {
++        Command::Login => run_login(),
++        Command::ShowThread { url } => run_show_thread(&url),
++    }
++}
++
+ fn main() {
+     let args: Vec<String> = std::env::args().collect();
+     match run(args) {
+@@ -84,20 +124,30 @@ mod tests {
+     use super::*;
+ 
+     #[test]
+-    fn test_parse_args_valid() {
++    fn test_parse_args_valid_url() {
+         let args = vec![
+             "slk".to_string(),
+             "https://myteam.slack.REDACTED".to_string(),
+         ];
+         let result = parse_args(args).unwrap();
+-        assert_eq!(
+-            result,
+-            "https://myteam.slack.REDACTED"
+-        );
++        match result {
++            Command::ShowThread { url } => assert_eq!(
++                url,
++                "https://myteam.slack.REDACTED"
++            ),
++            _ => panic!("expected ShowThread"),
++        }
++    }
++
++    #[test]
++    fn test_parse_args_login() {
++        let args = vec!["slk".to_string(), "login".to_string()];
++        let result = parse_args(args).unwrap();
++        assert!(matches!(result, Command::Login));
+     }
+ 
+     #[test]
+-    fn test_parse_args_no_url() {
++    fn test_parse_args_no_args() {
+         let args = vec!["slk".to_string()];
+         assert!(parse_args(args).is_err());
+     }
+- Current branch: main
+- Recent commits: da37dd2 chore: add entire tool configuration and claude code hooks Entire-Checkpoint: a96020e1cce9
+3d51ab1 feat: resolve user names via users.info API with error handling Entire-Checkpoint: 954e1bef0b32
+360c735 feat: add timestamp display to slack messages Entire-Checkpoint: fb12e6658184
+af6c4ef first commit
+
+## Your task
+
+変更内容を分析し、3つのコミットメッセージ候補を生成してユーザーに選択させます。
+
+1. Analyze the diff content to understand the nature and purpose of the changes
+2. Generate 3 commit message candidates based on the changes
+   - Each candidate should be concise, clear, and capture the essence of the changes
+   - Prefer Conventional Commits format (feat:, fix:, docs:, refactor:, etc.)
+3. Select the most appropriate commit message from the 3 candidates and explain the reasoning for your choice
+4. Stage changes if necessary using git add
+5. Execute git commit using the selected commit message
+
+## Constraint
+
+- Claude co-authorshipフッターは不要
+- 1行で簡潔
+- メッセージは簡単な英語
