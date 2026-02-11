@@ -1,0 +1,107 @@
+Implement the following plan:
+
+# OAuth フローをローカル HTTPS サーバー + state 検証方式に変更
+
+## Context
+
+現在の `slk login` は、Slack の OAuth コールバック URL をユーザーに手動でコピー＆ペーストしてもらう方式。
+これをローカル HTTPS サーバー（自己署名証明書）で自動的にコールバックを受け取る方式に変更し、`state` パラメータで CSRF 保護も追加する。
+
+**新フロー:**
+1. `slk login` → state 生成 + 自己署名証明書生成 + HTTPS サーバー起動
+2. 認可 URL をブラウザで開く（`xdg-open`）
+3. ユーザーが Slack で認可
+4. Slack が `https://localhost:9876?code=xxx&state=yyy` にリダイレクト
+5. ブラウザで証明書警告 → ユーザーが許可 → サーバーがコールバックを受信
+6. state 検証 → code 抽出 → トークン取得 → 保存
+
+## 変更ファイル
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `Cargo.toml` | `rcgen`, `rustls`, `rustls-pki-types` を追加 |
+| `src/oauth.rs` | HTTPS サーバー方式に全面書き換え |
+| `src/main.rs` | 変更なし（`run_oauth_flow` のシグネチャは同一） |
+
+## 1. `Cargo.toml` — 依存追加
+
+```toml
+[dependencies]
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rustls-pki-types = "1"
+```
+
+- `ring` feature で `aws-lc-rs`（cmake 必要）を回避
+- `rcgen` は rustls と同じエコシステムで型互換あり
+
+## 2. `src/oauth.rs` — 関数ごとの変更
+
+### 2a. imports 更新
+
+```rust
+use crate::error::SlkError;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::process::Command;
+use std::sync::Arc;
+use rcgen::generate_simple_self_signed;
+use rustls::ServerConfig;
+use rustls::pki_types::PrivateKeyDer;
+```
+
+### 2b. `generate_state()` — 新規追加
+
+`/dev/urandom` から 16 バイト読み取り → 32 文字の hex 文字列。
+
+### 2c. `extract_code_from_url()` → `extract_callback_params()` に変更
+
+- HTTP リクエスト行（`GET /?code=xxx&state=yyy HTTP/1.1`）をパース
+- `(code, state)` のタプルを返す
+
+### 2d. `build_tls_config()` — 新規追加
+
+- `rcgen::generate_simple_self_signed(["localhost"])` で自己署名証明書生成
+- `ServerConfig::builder().with_no_client_auth().with_single_cert(...)` で TLS 設定構築
+
+### 2e. `wait_for_callback()` — 新規追加
+
+- `TcpListener::bind("127.0.0.1:9876")` → accept
+- `rustls::StreamOwned` で TLS ハンドシェイク + HTTP リクエスト読み取り
+- 成功 HTML レスポンスを返却
+
+### 2f. `run_oauth_flow()` — 書き換え
+
+```
+state 生成 → TLS config 構築 → auth URL にブラウザ誘導
+→ wait_for_callback() → extract_callback_params()
+→ state 検証 → exchange_code()
+```
+
+### 2g. `exchange_code()` / `REDIRECT_URI` — 変更なし
+
+## 3. テスト更新
+
+既存 4 テスト → 8 テストに置き換え:
+- `extract_callback_params`: valid / reversed order / missing code / missing state / no query / empty request
+- `generate_state`: 長さ・hex 検証 / ユニーク性検証
+
+## 検証
+
+```bash
+cargo check        # コンパイル確認
+cargo test         # 全テスト通過
+cargo clippy       # 警告なし
+cargo run -- login # E2E: ブラウザ認可 → コールバック受信 → トークン保存
+```
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kanta/.REDACTED.jsonl
+
+---
+
+Error: failed to read from TLS stream: received fatal alert: CertificateUnknown で失敗した
+
+---
+
+[Request interrupted by user for tool use]
