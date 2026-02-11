@@ -14,14 +14,14 @@ enum Command {
     Login,
     ListConversations,
     ShowHistory { channel_id: String },
-    ShowThread { url: String },
+    ShowThread { channel_id: String, ts: String },
 }
 
 fn parse_args(args: Vec<String>) -> Result<Command, SlkError> {
     let mut iter = args.into_iter();
     iter.next(); // skip program name
     let arg = iter.next().ok_or(SlkError::from(
-        "usage: slk <slack-thread-url>\n       slk login\n       slk list\n       slk history <channel-id>",
+        "usage: slk login\n       slk list\n       slk history <channel-id>\n       slk thread <channel-id> <thread-ts>\n       slk thread <url>",
     ))?;
 
     if arg == "login" {
@@ -33,8 +33,23 @@ fn parse_args(args: Vec<String>) -> Result<Command, SlkError> {
             "usage: slk history <channel-id>",
         ))?;
         Ok(Command::ShowHistory { channel_id })
+    } else if arg == "thread" {
+        let first = iter.next().ok_or(SlkError::from(
+            "usage: slk thread <channel-id> <thread-ts>\n       slk thread <url>",
+        ))?;
+        if first.starts_with("http") {
+            let thread = url::parse_slack_url(&first)?;
+            Ok(Command::ShowThread { channel_id: thread.channel_id, ts: thread.ts })
+        } else {
+            let ts = iter.next().ok_or(SlkError::from(
+                "usage: slk thread <channel-id> <thread-ts>",
+            ))?;
+            Ok(Command::ShowThread { channel_id: first, ts })
+        }
     } else {
-        Ok(Command::ShowThread { url: arg })
+        Err(SlkError::from(
+            "usage: slk login\n       slk list\n       slk history <channel-id>\n       slk thread <channel-id> <thread-ts>\n       slk thread <url>",
+        ))
     }
 }
 
@@ -101,10 +116,9 @@ fn run_login() -> Result<String, SlkError> {
     Ok(format!("Token saved to {}", path.display()))
 }
 
-fn run_show_thread(url_str: &str) -> Result<String, SlkError> {
+fn run_show_thread(channel_id: &str, ts: &str) -> Result<String, SlkError> {
     let token = resolve_token()?;
-    let thread = url::parse_slack_url(url_str)?;
-    let raw_json = slack_api::fetch_thread_replies(&thread.channel_id, &thread.ts, &token)?;
+    let raw_json = slack_api::fetch_thread_replies(channel_id, ts, &token)?;
     let json_value = json::parse(&raw_json)?;
     let messages = message::extract_messages(&json_value)?;
     let user_names = resolve_user_names(&messages, &token)?;
@@ -137,7 +151,7 @@ fn run(args: Vec<String>) -> Result<String, SlkError> {
         Command::Login => run_login(),
         Command::ListConversations => run_list_conversations(),
         Command::ShowHistory { channel_id } => run_show_history(&channel_id),
-        Command::ShowThread { url } => run_show_thread(&url),
+        Command::ShowThread { channel_id, ts } => run_show_thread(&channel_id, &ts),
     }
 }
 
@@ -157,19 +171,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_args_valid_url() {
+    fn test_parse_args_thread_with_url() {
         let args = vec![
             "slk".to_string(),
+            "thread".to_string(),
             "https://myteam.slack.com/archives/C081VT5GLQH/p1770689887565249".to_string(),
         ];
         let result = parse_args(args).unwrap();
         match result {
-            Command::ShowThread { url } => assert_eq!(
-                url,
-                "https://myteam.slack.com/archives/C081VT5GLQH/p1770689887565249"
-            ),
+            Command::ShowThread { channel_id, ts } => {
+                assert_eq!(channel_id, "C081VT5GLQH");
+                assert_eq!(ts, "1770689887.565249");
+            }
             _ => panic!("expected ShowThread"),
         }
+    }
+
+    #[test]
+    fn test_parse_args_thread_with_ids() {
+        let args = vec![
+            "slk".to_string(),
+            "thread".to_string(),
+            "C081VT5GLQH".to_string(),
+            "1770689887.565249".to_string(),
+        ];
+        let result = parse_args(args).unwrap();
+        match result {
+            Command::ShowThread { channel_id, ts } => {
+                assert_eq!(channel_id, "C081VT5GLQH");
+                assert_eq!(ts, "1770689887.565249");
+            }
+            _ => panic!("expected ShowThread"),
+        }
+    }
+
+    #[test]
+    fn test_parse_args_thread_missing_args() {
+        let args = vec!["slk".to_string(), "thread".to_string()];
+        assert!(parse_args(args).is_err());
+    }
+
+    #[test]
+    fn test_parse_args_unknown_command() {
+        let args = vec!["slk".to_string(), "foo".to_string()];
+        assert!(parse_args(args).is_err());
     }
 
     #[test]

@@ -5,10 +5,11 @@ A CLI tool to read Slack threads in the terminal.
 ## Usage
 
 ```bash
-slk <slack-thread-url>   # Display thread messages
-slk login                # Authenticate via OAuth
-slk list                 # List conversations
-slk history <channel-id> # Show recent messages in a channel
+slk login                                # Authenticate via OAuth
+slk list                                 # List conversations
+slk history <channel-id>                 # Show recent messages in a channel
+slk thread <channel-id> <thread-ts>      # Display thread messages
+slk thread <url>                         # Display thread messages (from URL)
 ```
 
 ## Prerequisites
