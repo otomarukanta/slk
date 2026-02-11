@@ -3,7 +3,7 @@
   "checkpoint_id": "7158f4df2842",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "Cargo.toml",
     "src/oauth.rs"
@@ -22,13 +22,20 @@
       "context": "/71/58f4df2842/1/context.md",
       "content_hash": "/71/58f4df2842/1/content_hash.txt",
       "prompt": "/71/58f4df2842/1/prompt.txt"
+    },
+    {
+      "metadata": "/71/58f4df2842/2/metadata.json",
+      "transcript": "/71/58f4df2842/2/full.jsonl",
+      "context": "/71/58f4df2842/2/context.md",
+      "content_hash": "/71/58f4df2842/2/content_hash.txt",
+      "prompt": "/71/58f4df2842/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 47,
-    "cache_creation_tokens": 79593,
-    "cache_read_tokens": 1441711,
-    "output_tokens": 1028,
-    "api_call_count": 37
+    "input_tokens": 63,
+    "cache_creation_tokens": 110127,
+    "cache_read_tokens": 1791169,
+    "output_tokens": 1174,
+    "api_call_count": 49
   }
 }
