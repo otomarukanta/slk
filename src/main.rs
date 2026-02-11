@@ -15,7 +15,14 @@ fn parse_args(args: Vec<String>) -> Result<String, SlkError> {
 fn format_messages(messages: &[message::SlackMessage]) -> String {
     messages
         .iter()
-        .map(|m| format!("[{}] {}", m.user, m.text))
+        .map(|m| {
+            format!(
+                "{} [{}] {}",
+                message::format_unix_ts(&m.ts),
+                m.user,
+                m.text
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -71,16 +78,18 @@ mod tests {
             message::SlackMessage {
                 user: "U081R4ZS5E2".to_string(),
                 text: "Hello, this is a thread".to_string(),
+                ts: "1770689887.565249".to_string(),
             },
             message::SlackMessage {
                 user: "U092X3AB7F1".to_string(),
                 text: "Great thread!".to_string(),
+                ts: "1770689900.000100".to_string(),
             },
         ];
         let output = format_messages(&messages);
         assert_eq!(
             output,
-            "[U081R4ZS5E2] Hello, this is a thread\n[U092X3AB7F1] Great thread!"
+            "2026-02-10 02:18:07 [U081R4ZS5E2] Hello, this is a thread\n2026-02-10 02:18:20 [U092X3AB7F1] Great thread!"
         );
     }
 
