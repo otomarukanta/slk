@@ -7,6 +7,8 @@ A CLI tool to read Slack threads in the terminal.
 ```bash
 slk <slack-thread-url>   # Display thread messages
 slk login                # Authenticate via OAuth
+slk list                 # List conversations
+slk history <channel-id> # Show recent messages in a channel
 ```
 
 ## Prerequisites
@@ -24,7 +26,7 @@ cargo install --path .
 
 1. Create a Slack app at https://api.slack.com/apps
 2. Add OAuth redirect URL: `https://127.0.0.1:9876`
-3. Add User Token Scopes: `channels:history`, `groups:history`, `users:read`
+3. Add User Token Scopes: `channels:history`, `channels:read`, `groups:history`, `groups:read`, `mpim:read`, `im:read`, `users:read`
 4. Note the Client ID and Client Secret
 
 ## Configuration

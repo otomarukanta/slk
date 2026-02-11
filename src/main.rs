@@ -12,17 +12,27 @@ use error::SlkError;
 
 enum Command {
     Login,
+    ListConversations,
+    ShowHistory { channel_id: String },
     ShowThread { url: String },
 }
 
 fn parse_args(args: Vec<String>) -> Result<Command, SlkError> {
-    let arg = args
-        .into_iter()
-        .nth(1)
-        .ok_or(SlkError::from("usage: slk <slack-thread-url>\n       slk login"))?;
+    let mut iter = args.into_iter();
+    iter.next(); // skip program name
+    let arg = iter.next().ok_or(SlkError::from(
+        "usage: slk <slack-thread-url>\n       slk login\n       slk list\n       slk history <channel-id>",
+    ))?;
 
     if arg == "login" {
         Ok(Command::Login)
+    } else if arg == "list" {
+        Ok(Command::ListConversations)
+    } else if arg == "history" {
+        let channel_id = iter.next().ok_or(SlkError::from(
+            "usage: slk history <channel-id>",
+        ))?;
+        Ok(Command::ShowHistory { channel_id })
     } else {
         Ok(Command::ShowThread { url: arg })
     }
@@ -101,9 +111,32 @@ fn run_show_thread(url_str: &str) -> Result<String, SlkError> {
     Ok(format_messages(&messages, &user_names))
 }
 
+fn run_list_conversations() -> Result<String, SlkError> {
+    let token = resolve_token()?;
+    let raw_json = slack_api::fetch_conversations_list(&token)?;
+    let json_value = json::parse(&raw_json)?;
+    let conversations = message::extract_conversations(&json_value)?;
+    let lines: Vec<String> = conversations
+        .iter()
+        .map(|c| format!("{}\t{}", c.id, c.name))
+        .collect();
+    Ok(lines.join("\n"))
+}
+
+fn run_show_history(channel_id: &str) -> Result<String, SlkError> {
+    let token = resolve_token()?;
+    let raw_json = slack_api::fetch_conversation_history(channel_id, &token)?;
+    let json_value = json::parse(&raw_json)?;
+    let messages = message::extract_messages(&json_value)?;
+    let user_names = resolve_user_names(&messages, &token)?;
+    Ok(format_messages(&messages, &user_names))
+}
+
 fn run(args: Vec<String>) -> Result<String, SlkError> {
     match parse_args(args)? {
         Command::Login => run_login(),
+        Command::ListConversations => run_list_conversations(),
+        Command::ShowHistory { channel_id } => run_show_history(&channel_id),
         Command::ShowThread { url } => run_show_thread(&url),
     }
 }
@@ -144,6 +177,30 @@ mod tests {
         let args = vec!["slk".to_string(), "login".to_string()];
         let result = parse_args(args).unwrap();
         assert!(matches!(result, Command::Login));
+    }
+
+    #[test]
+    fn test_parse_args_list() {
+        let args = vec!["slk".to_string(), "list".to_string()];
+        let result = parse_args(args).unwrap();
+        assert!(matches!(result, Command::ListConversations));
+    }
+
+    #[test]
+    fn test_parse_args_history() {
+        let args = vec!["slk".to_string(), "history".to_string(), "C081VT5GLQH".to_string()];
+        let result = parse_args(args).unwrap();
+        match result {
+            Command::ShowHistory { channel_id } => assert_eq!(channel_id, "C081VT5GLQH"),
+            _ => panic!("expected ShowHistory"),
+        }
+    }
+
+    #[test]
+    fn test_parse_args_history_missing_channel_id() {
+        let args = vec!["slk".to_string(), "history".to_string()];
+        let result = parse_args(args);
+        assert!(result.is_err());
     }
 
     #[test]

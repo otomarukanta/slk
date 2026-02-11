@@ -168,7 +168,7 @@ pub fn run_oauth_flow(client_id: &str, client_secret: &str) -> Result<String, Sl
     let tls_config = Arc::new(build_tls_config()?);
 
     let auth_url = format!(
-        "https://slack.com/oauth/v2/authorize?client_id={}&user_scope=channels:history,groups:history,users:read&redirect_uri={}&state={}",
+        "https://slack.com/oauth/v2/authorize?client_id={}&user_scope=channels:history,channels:read,groups:history,groups:read,mpim:read,im:read,users:read&redirect_uri={}&state={}",
         client_id,
         REDIRECT_URI.replace(':', "%3A").replace('/', "%2F"),
         state

@@ -93,6 +93,58 @@ pub fn extract_messages(response: &JsonValue) -> Result<Vec<SlackMessage>, SlkEr
     Ok(result)
 }
 
+#[derive(Debug, PartialEq)]
+pub struct SlackConversation {
+    pub id: String,
+    pub name: String,
+}
+
+pub fn extract_conversations(response: &JsonValue) -> Result<Vec<SlackConversation>, SlkError> {
+    let ok = response
+        .get("ok")
+        .and_then(|v| v.as_bool())
+        .ok_or(SlkError::from("missing 'ok' field in response"))?;
+
+    if !ok {
+        let error = response
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        let needed = response.get("needed").and_then(|v| v.as_str());
+        let provided = response.get("provided").and_then(|v| v.as_str());
+        let mut msg = format!("Slack API error: {}", error);
+        if let Some(needed) = needed {
+            msg.push_str(&format!("\n  needed scope: {}", needed));
+        }
+        if let Some(provided) = provided {
+            msg.push_str(&format!("\n  provided scopes: {}", provided));
+        }
+        return Err(SlkError::from(msg));
+    }
+
+    let channels = response
+        .get("channels")
+        .and_then(|v| v.as_array())
+        .ok_or(SlkError::from("missing 'channels' array in response"))?;
+
+    let mut result = Vec::new();
+    for ch in channels {
+        let id = ch
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let name = ch
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        result.push(SlackConversation { id, name });
+    }
+
+    Ok(result)
+}
+
 pub fn resolve_user_name(response: &JsonValue) -> Result<String, SlkError> {
     let ok = response
         .get("ok")
@@ -313,5 +365,53 @@ mod tests {
         let messages = extract_messages(&json_val).unwrap();
 
         assert_eq!(messages[0].user, "unknown");
+    }
+
+    #[test]
+    fn test_extract_conversations() {
+        let input = r#"{
+            "ok": true,
+            "channels": [
+                {"id": "C081VT5GLQH", "name": "general"},
+                {"id": "C092X3AB7F1", "name": "random"}
+            ]
+        }"#;
+        let json_val = json::parse(input).unwrap();
+        let conversations = extract_conversations(&json_val).unwrap();
+
+        assert_eq!(conversations.len(), 2);
+        assert_eq!(
+            conversations[0],
+            SlackConversation {
+                id: "C081VT5GLQH".to_string(),
+                name: "general".to_string(),
+            }
+        );
+        assert_eq!(
+            conversations[1],
+            SlackConversation {
+                id: "C092X3AB7F1".to_string(),
+                name: "random".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_extract_conversations_error() {
+        let input = r#"{"ok": false, "error": "invalid_auth"}"#;
+        let json_val = json::parse(input).unwrap();
+        let result = extract_conversations(&json_val);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("invalid_auth"));
+    }
+
+    #[test]
+    fn test_extract_conversations_empty() {
+        let input = r#"{"ok": true, "channels": []}"#;
+        let json_val = json::parse(input).unwrap();
+        let conversations = extract_conversations(&json_val).unwrap();
+
+        assert!(conversations.is_empty());
     }
 }
