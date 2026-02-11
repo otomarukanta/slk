@@ -1,0 +1,365 @@
+Implement the following plan:
+
+# users.info API のエラーハンドリング追加
+
+## Context
+`resolve_user_name` が `Option<String>` を返しており、Slack API の `ok` フィールドをチェックしていない。そのためトークンに `users:read` 権限が不足している場合、エラーが静かに無視されユーザーIDがそのまま表示される。`extract_messages` と同じパターン（`ok` チェック + `needed`/`provided` スコープ表示）でエラーを返すようにする。
+
+## 変更内容
+
+### 1. `src/message.rs` — `resolve_user_name` の返り値を `Result` に変更
+- シグネチャ: `resolve_user_name(response: &JsonValue) -> Result<String, SlkError>`
+- `extract_messages` と同じパターンで `ok` フィールドをチェック
+  - `ok: false` の場合: `error`, `needed`, `provided` を含むエラーメッセージで `Err` を返す
+- `ok: true` だが名前が取得できない場合も `Err` を返す
+- 既存テストを `Result` に合わせて更新、権限エラーのテストを追加
+
+### 2. `src/main.rs` — `resolve_user_names` でエラーを伝播
+- 現在 `if let Ok / if let Some` で全エラーを握りつぶしている箇所を修正
+- `resolve_user_name` が `Err` を返したらそのまま `?` で `run()` に伝播
+  - 権限不足は全ユーザーに共通の問題なので、最初の1件で即エラー終了が適切
+
+### 修正対象ファイル
+- `src/message.rs` (96-121行目) — `resolve_user_name` のシグネチャ変更 + `ok` チェック追加
+- `src/main.rs` (39-60行目) — `resolve_user_names` の返り値を `Result` に変更しエラー伝播
+
+## 検証
+- `cargo test` で全テストパス
+- `cargo build` でビルド成功
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kanta/.REDACTED.jsonl
+
+---
+
+## Context
+
+- Current git status: On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   src/main.rs
+	modified:   src/message.rs
+	modified:   src/slack_api.rs
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.claude/
+	.entire/
+
+no changes added to commit (use "git add" and/or "git commit -a")
+- Current git diff (staged and unstaged changes): diff --git a/src/main.rs b/src/main.rs
+index 88c6d1c..506d958 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -4,6 +4,8 @@ mod message;
+ mod slack_api;
+ mod url;
+ 
++use std::collections::HashMap;
++
+ use error::SlkError;
+ 
+ fn parse_args(args: Vec<String>) -> Result<String, SlkError> {
+@@ -12,14 +14,21 @@ fn parse_args(args: Vec<String>) -> Result<String, SlkError> {
+         .ok_or(SlkError::from("usage: slk <slack-thread-url>"))
+ }
+ 
+-fn format_messages(messages: &[message::SlackMessage]) -> String {
++fn format_messages(
++    messages: &[message::SlackMessage],
++    user_names: &HashMap<String, String>,
++) -> String {
+     messages
+         .iter()
+         .map(|m| {
++            let display = match user_names.get(&m.user) {
++                Some(name) => format!("@{}", name),
++                None => m.user.clone(),
++            };
+             format!(
+-                "{} [{}] {}",
++                "{} {} {}",
+                 message::format_unix_ts(&m.ts),
+-                m.user,
++                display,
+                 m.text
+             )
+         })
+@@ -27,6 +36,26 @@ fn format_messages(messages: &[message::SlackMessage]) -> String {
+         .join("\n")
+ }
+ 
++fn resolve_user_names(
++    messages: &[message::SlackMessage],
++    token: &str,
++) -> Result<HashMap<String, String>, SlkError> {
++    let unique_ids: std::collections::HashSet<&str> = messages
++        .iter()
++        .map(|m| m.user.as_str())
++        .filter(|id| id.starts_with('U'))
++        .collect();
++
++    let mut names = HashMap::new();
++    for id in unique_ids {
++        let raw = slack_api::fetch_user_info(id, token)?;
++        let json_val = json::parse(&raw)?;
++        let name = message::resolve_user_name(&json_val)?;
++        names.insert(id.to_string(), name);
++    }
++    Ok(names)
++}
++
+ fn run(args: Vec<String>) -> Result<String, SlkError> {
+     let url_str = parse_args(args)?;
+     let token = std::env::var("SLACK_TOKEN")
+@@ -35,7 +64,8 @@ fn run(args: Vec<String>) -> Result<String, SlkError> {
+     let raw_json = slack_api::fetch_thread_replies(&thread.channel_id, &thread.ts, &token)?;
+     let json_value = json::parse(&raw_json)?;
+     let messages = message::extract_messages(&json_value)?;
+-    Ok(format_messages(&messages))
++    let user_names = resolve_user_names(&messages, &token)?;
++    Ok(format_messages(&messages, &user_names))
+ }
+ 
+ fn main() {
+@@ -73,7 +103,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn test_format_messages() {
++    fn test_format_messages_with_resolved_names() {
+         let messages = vec![
+             message::SlackMessage {
+                 user: "U081R4ZS5E2".to_string(),
+@@ -86,16 +116,32 @@ mod tests {
+                 ts: "1770689900.000100".to_string(),
+             },
+         ];
+-        let output = format_messages(&messages);
++        let mut user_names = HashMap::new();
++        user_names.insert("U081R4ZS5E2".to_string(), "kanta".to_string());
++        user_names.insert("U092X3AB7F1".to_string(), "taro".to_string());
++        let output = format_messages(&messages, &user_names);
+         assert_eq!(
+             output,
+-            "2026-02-10 02:18:07 [U081R4ZS5E2] Hello, this is a thread\n2026-02-10 02:18:20 [U092X3AB7F1] Great thread!"
++            "2026-02-10 02:18:07 @kanta Hello, this is a thread\n2026-02-10 02:18:20 @taro Great thread!"
+         );
+     }
+ 
++    #[test]
++    fn test_format_messages_unresolved_fallback() {
++        let messages = vec![message::SlackMessage {
++            user: "U081R4ZS5E2".to_string(),
++            text: "Hello".to_string(),
++            ts: "1770689887.565249".to_string(),
++        }];
++        let user_names = HashMap::new();
++        let output = format_messages(&messages, &user_names);
++        assert_eq!(output, "2026-02-10 02:18:07 U081R4ZS5E2 Hello");
++    }
++
+     #[test]
+     fn test_format_messages_empty() {
+         let messages: Vec<message::SlackMessage> = vec![];
+-        assert_eq!(format_messages(&messages), "");
++        let user_names = HashMap::new();
++        assert_eq!(format_messages(&messages, &user_names), "");
+     }
+ }
+diff --git a/src/message.rs b/src/message.rs
+index 8892486..44ca094 100644
+--- a/src/message.rs
++++ b/src/message.rs
+@@ -93,6 +93,57 @@ pub fn extract_messages(response: &JsonValue) -> Result<Vec<SlackMessage>, SlkEr
+     Ok(result)
+ }
+ 
++pub fn resolve_user_name(response: &JsonValue) -> Result<String, SlkError> {
++    let ok = response
++        .get("ok")
++        .and_then(|v| v.as_bool())
++        .ok_or(SlkError::from("missing 'ok' field in response"))?;
++
++    if !ok {
++        let error = response
++            .get("error")
++            .and_then(|v| v.as_str())
++            .unwrap_or("unknown error");
++        let needed = response.get("needed").and_then(|v| v.as_str());
++        let provided = response.get("provided").and_then(|v| v.as_str());
++        let mut msg = format!("Slack API error: {}", error);
++        if let Some(needed) = needed {
++            msg.push_str(&format!("\n  needed scope: {}", needed));
++        }
++        if let Some(provided) = provided {
++            msg.push_str(&format!("\n  provided scopes: {}", provided));
++        }
++        return Err(SlkError::from(msg));
++    }
++
++    let user = response
++        .get("user")
++        .ok_or(SlkError::from("missing 'user' field in response"))?;
++
++    let profile = user.get("profile");
++    if let Some(profile) = profile {
++        if let Some(display_name) = profile.get("display_name").and_then(|v| v.as_str()) {
++            if !display_name.is_empty() {
++                return Ok(display_name.to_string());
++            }
++        }
++    }
++
++    if let Some(real_name) = user.get("real_name").and_then(|v| v.as_str()) {
++        if !real_name.is_empty() {
++            return Ok(real_name.to_string());
++        }
++    }
++
++    if let Some(name) = user.get("name").and_then(|v| v.as_str()) {
++        if !name.is_empty() {
++            return Ok(name.to_string());
++        }
++    }
++
++    Err(SlkError::from("no user name found in response"))
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -179,6 +230,79 @@ mod tests {
+         assert_eq!(messages[0].text, "");
+     }
+ 
++    #[test]
++    fn test_resolve_user_name_display_name() {
++        let input = r#"{
++            "ok": true,
++            "user": {
++                "name": "kanta",
++                "real_name": "Kanta Otomaeru",
++                "profile": {
++                    "display_name": "kanta"
++                }
++            }
++        }"#;
++        let json_val = json::parse(input).unwrap();
++        assert_eq!(resolve_user_name(&json_val).unwrap(), "kanta");
++    }
++
++    #[test]
++    fn test_resolve_user_name_fallback_to_real_name() {
++        let input = r#"{
++            "ok": true,
++            "user": {
++                "name": "kanta",
++                "real_name": "Kanta Otomaeru",
++                "profile": {
++                    "display_name": ""
++                }
++            }
++        }"#;
++        let json_val = json::parse(input).unwrap();
++        assert_eq!(resolve_user_name(&json_val).unwrap(), "Kanta Otomaeru");
++    }
++
++    #[test]
++    fn test_resolve_user_name_fallback_to_name() {
++        let input = r#"{
++            "ok": true,
++            "user": {
++                "name": "kanta",
++                "profile": {
++                    "display_name": ""
++                }
++            }
++        }"#;
++        let json_val = json::parse(input).unwrap();
++        assert_eq!(resolve_user_name(&json_val).unwrap(), "kanta");
++    }
++
++    #[test]
++    fn test_resolve_user_name_api_error() {
++        let input = r#"{"ok": false, "error": "user_not_found"}"#;
++        let json_val = json::parse(input).unwrap();
++        let result = resolve_user_name(&json_val);
++        assert!(result.is_err());
++        assert!(result.unwrap_err().message.contains("user_not_found"));
++    }
++
++    #[test]
++    fn test_resolve_user_name_missing_scope() {
++        let input = r#"{
++            "ok": false,
++            "error": "missing_scope",
++            "needed": "users:read",
++            "provided": "channels:history"
++        }"#;
++        let json_val = json::parse(input).unwrap();
++        let result = resolve_user_name(&json_val);
++        assert!(result.is_err());
++        let msg = result.unwrap_err().message;
++        assert!(msg.contains("missing_scope"));
++        assert!(msg.contains("users:read"));
++        assert!(msg.contains("channels:history"));
++    }
++
+     #[test]
+     fn test_completely_unknown_user() {
+         let input = r#"{
+diff --git a/src/slack_api.rs b/src/slack_api.rs
+index 5519fc8..24fddea 100644
+--- a/src/slack_api.rs
++++ b/src/slack_api.rs
+@@ -8,6 +8,25 @@ pub fn build_api_url(channel_id: &str, ts: &str) -> String {
+     )
+ }
+ 
++pub fn fetch_user_info(user_id: &str, token: &str) -> Result<String, SlkError> {
++    let url = format!("https://slack.com/api/users.info?user={}", user_id);
++    let output = Command::new("curl")
++        .args(["-s", "-H", &format!("Authorization: Bearer {}", token), &url])
++        .output()
++        .map_err(|e| SlkError::from(format!("failed to execute curl: {}", e)))?;
++
++    if !output.status.success() {
++        let stderr = String::from_utf8_lossy(&output.stderr);
++        return Err(SlkError::from(format!(
++            "curl failed (exit {}): {}",
++            output.status, stderr
++        )));
++    }
++
++    String::from_utf8(output.stdout)
++        .map_err(|e| SlkError::from(format!("invalid UTF-8 in response: {}", e)))
++}
++
+ pub fn fetch_thread_replies(channel_id: &str, ts: &str, token: &str) -> Result<String, SlkError> {
+     let url = build_api_url(channel_id, ts);
+     let output = Command::new("curl")
+- Current branch: main
+- Recent commits: 360c735 feat: add timestamp display to slack messages Entire-Checkpoint: fb12e6658184
+af6c4ef first commit
+
+## Your task
+
+変更内容を分析し、3つのコミットメッセージ候補を生成してユーザーに選択させます。
+
+1. Analyze the diff content to understand the nature and purpose of the changes
+2. Generate 3 commit message candidates based on the changes
+   - Each candidate should be concise, clear, and capture the essence of the changes
+   - Prefer Conventional Commits format (feat:, fix:, docs:, refactor:, etc.)
+3. Select the most appropriate commit message from the 3 candidates and explain the reasoning for your choice
+4. Stage changes if necessary using git add
+5. Execute git commit using the selected commit message
+
+## Constraint
+
+- Claude co-authorshipフッターは不要
+- 1行で簡潔
+- メッセージは簡単な英語
